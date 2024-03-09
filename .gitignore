@@ -1,3 +1,4 @@
 .vagrant/
-secrets.toml
+.env
 __pycache__/
+private.pem
