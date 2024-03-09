@@ -22,5 +22,8 @@ Vagrant.configure("2") do |config|
     apt-get install -y jq
     wget $(curl -s https://api.github.com/repos/actions/runner/releases/latest | \
     jq -r '.assets[] | select(.name | contains ("linux-x64")) | .browser_download_url')
+    mkdir actions-runner
+    tar xzf ./actions-runner-linux-x64* -C actions-runner
+    chown -R vagrant:vagrant actions-runner
   SHELL
 end

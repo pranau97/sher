@@ -1,6 +1,6 @@
 from .auth import authenticate_github_app
 from .utils import logger, environment
-from .vagrant import start_vm
+from .vagrant import start_vm, destroy_vm
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 
@@ -31,7 +31,7 @@ def verify_signature(payload_body: bytes, signature_header: str | None) -> None:
 def start_runner(payload: dict) -> None:
     labels = payload["workflow_job"]["labels"]
     if "auto-runner" in labels:
-        logger.info("Auto-runner label detected.")
+        logger.info("auto-runner label detected.")
         installation_id = payload["installation"]["id"]
         owner = payload["repository"]["owner"]["login"]
         repository = payload["repository"]["name"]
@@ -55,6 +55,17 @@ def start_runner(payload: dict) -> None:
         logger.info("auto-runner label not detected.")
 
 
+def end_runner(payload: dict) -> None:
+    workflow_id = payload["workflow_job"]["id"]
+    labels = payload["workflow_job"]["labels"]
+
+    if "auto-runner" in labels:
+        logger.info("auto-runner label detected.")
+        destroy_vm(workflow_id)
+    else:
+        logger.info("auto-runner label not detected.")
+
+
 @app.post("/webhook")
 async def github_webhook(
     request: Request, background_tasks: BackgroundTasks
@@ -72,5 +83,7 @@ async def github_webhook(
     payload = await request.json()
     if event_header == "workflow_job" and payload["action"] == "queued":
         background_tasks.add_task(start_runner, payload)
+    elif event_header == "workflow_job" and payload["action"] == "completed":
+        background_tasks.add_task(end_runner, payload)
 
     return {"message": "Webhook received and verified!"}
