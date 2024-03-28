@@ -1,0 +1,40 @@
+{% extends "base.html.jinja" %}
+
+{% block content %}
+<div class="container">
+    <div class="row mt-3">
+        <h2>Scan A Workflow</h2>
+        <p>Ensure the security of your GitHub Actions by scanning your workflows for vulnerabilities. Input your
+            repository name
+            below to begin the scan.</p>
+    </div>
+    <div class="row">
+        <form class="row bg-primary bg-opacity-10 rounded border border-primary g-0" action="/" method="get">
+            <div class="row">
+                <div class="col mb-3 mt-3">
+                    <p>Enter the repository's full name in the format: <code>owner/repo-name</code></p>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col mb-3">
+                    <input class="form-control" name="search" type="text" id="search" placeholder="Repository Name">
+                </div>
+                <div class="col-auto mb-3">
+                    <button class="form-control btn btn-outline-primary" type="submit" aria-label="Search">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
+                            class="bi bi-search" viewBox="0 0 16 16" aria-label="Search">
+                            <path
+                                d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001q.044.06.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1 1 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </form>
+        {% if error %}
+        <div class="row mt-3 text-danger">
+            <p>The given repository does not have the GitHub App installed!</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock content %}
