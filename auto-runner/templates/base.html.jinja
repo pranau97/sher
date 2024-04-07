@@ -49,12 +49,26 @@
         </div>
     </nav>
 
+    <div id="spinnerOverlay"
+        style="display: none; position: fixed; top: 0; left: 0; height: 100%; width: 100%; background: rgba(0, 0, 0, 0.5);">
+        <div class="d-flex justify-content-center align-items-center" style="height: 100%; width: 100%;">
+            <div class="spinner-border text-primary" role="status">
+            </div>
+            <span role="status" class="text-light">Loading...</span>
+        </div>
+    </div>
+
     {% block content %}
     {% endblock %}
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
         integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
         crossorigin="anonymous"></script>
+    <script>
+        function showSpinner() {
+            document.getElementById('spinnerOverlay').style.display = 'flex';
+        }
+    </script>
 </body>
 
 </html>

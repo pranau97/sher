@@ -1,0 +1,45 @@
+{% extends "base.html.jinja" %}
+
+{% block content %}
+<div class="container">
+    {% if error %}
+    <div class="row mt-3">
+        <div class="alert alert-danger" role="alert">
+            {{ error }}
+        </div>
+    </div>
+    {% endif %}
+    <div class="row mt-3">
+        <h2>Recommendations for "{{ repository }}" - <code>{{ workflow }}</code></h2>
+    </div>
+    <br>
+    <br>
+    {% if results %}
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Line</th>
+                <th>Recommendations</th>
+            </tr>
+        </thead>
+        {% for _, result_value in results.items() %}
+        <thead>
+            <tr class="table-secondary">
+                <th colspan="2">{{ result_value.heading }}</th>
+            </tr>
+        </thead>
+        <tbody class="table-group-divider">
+            {% for result in result_value.results %}
+            <tr class="table-{{ result.sev }}">
+                <td>{{ result.line }}</td>
+                <td>{{ result.rec }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>No results found.</p>
+    {% endif %}
+</div>
+{% endblock content %}

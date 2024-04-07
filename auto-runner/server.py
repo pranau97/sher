@@ -1,6 +1,7 @@
 from .auth import authenticate_github_app, generate_jwt
-from .utils import logger, environment
+from .utils import logger, environment, gh_header_for_token
 from .vagrant import start_vm, destroy_vm
+from .rules import check_commit_hash, check_workflow_permissions, check_secrets
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.templating import Jinja2Templates
@@ -11,6 +12,9 @@ from pathlib import Path
 import hashlib
 import hmac
 import requests
+import urllib.parse
+import base64
+import yaml
 
 
 app = FastAPI()
@@ -48,11 +52,11 @@ def start_runner(payload: dict) -> None:
         workflow_id = payload["workflow_job"]["id"]
         token = authenticate_github_app(installation_id)
 
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-Github-Api-Version": "2022-11-28",
-        }
+        if not token:
+            logger.error("Failed to authenticate app")
+            raise HTTPException(status_code=502, detail="Failed to authenticate app")
+
+        headers = gh_header_for_token(token)
         registration_token_url = f"https://api.github.com/repos/{owner}/{repository}/actions/runners/registration-token"
         response = requests.post(registration_token_url, headers=headers)
         response.raise_for_status()
@@ -77,11 +81,7 @@ def end_runner(payload: dict) -> None:
 
 def get_repo_details(search: str) -> dict:
     jwt = generate_jwt()
-    headers = {
-        "Authorization": f"Bearer {jwt}",
-        "Accept": "application/vnd.github+json",
-        "X-Github-Api-Version": "2022-11-28",
-    }
+    headers = gh_header_for_token(jwt)
 
     installations_url = "https://api.github.com/app/installations"
     response = requests.get(installations_url, headers=headers)
@@ -107,11 +107,7 @@ def get_repo_details(search: str) -> dict:
     if not token:
         raise ValueError("Failed to authenticate app")
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-Github-Api-Version": "2022-11-28",
-    }
+    headers = gh_header_for_token(token)
     repos_url = "https://api.github.com/installation/repositories"
     response = requests.get(repos_url, headers=headers, params={"per_page": 100})
     response.raise_for_status()
@@ -128,6 +124,95 @@ def get_repo_details(search: str) -> dict:
             }
 
     raise ValueError("Not found")
+
+
+def get_workflow(
+    installation_id: int, owner: str, repo: str, workflow_id: int
+) -> tuple[dict, str]:
+
+    token = authenticate_github_app(installation_id)
+    if not token:
+        logger.error("Failed to authenticate app")
+        raise ValueError("Failed to authenticate app")
+
+    headers = gh_header_for_token(token)
+
+    workflow_url = (
+        f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow_id}"
+    )
+    response = requests.get(workflow_url, headers=headers)
+    response.raise_for_status()
+    workflow = response.json()
+
+    workflow_path = workflow["path"]
+    logger.debug(f"Workflow path: {workflow_path}")
+    repos_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{workflow_path}"
+    headers = gh_header_for_token(token, accept="application/vnd.github.object+json")
+    response = requests.get(repos_url, headers=headers)
+    response.raise_for_status()
+    workflow_contents = response.json()
+
+    contents = base64.b64decode(workflow_contents["content"]).decode("utf-8")
+    logger.debug(f"Workflow contents: {contents}")
+
+    return (workflow, contents)
+
+
+def scan_workflow(
+    contents: str, installation_id: int, owner: str, repo: str, fix: str | None = None
+) -> dict:
+    workflow = yaml.safe_load(contents)
+
+    if fix and fix == "commit":
+        commit_results = check_commit_hash(workflow, fix=True)
+    else:
+        commit_results = check_commit_hash(workflow)
+
+    if fix and fix == "permissions":
+        permissions_results = check_workflow_permissions(
+            installation_id, owner, repo, fix=True
+        )
+    else:
+        permissions_results = check_workflow_permissions(installation_id, owner, repo)
+
+    secrets_results = check_secrets(workflow)
+
+    commit_flag = False
+    for result in commit_results:
+        if result["sev"] in ["warning", "danger"]:
+            commit_flag = True
+            break
+    commit_fix_url = None
+    if commit_flag:
+        commit_fix_url = f"/scan/{repo}/{owner}?installation_id={installation_id}&workflow_id={workflow['id']}?fix=commit"
+
+    permissions_flag = False
+    for result in permissions_results:
+        if result["sev"] in ["warning", "danger"]:
+            permissions_flag = True
+            break
+    permissions_fix_url = None
+    if permissions_flag:
+        permissions_fix_url = f"/scan/{repo}/{owner}?installation_id={installation_id}&workflow_id={workflow['id']}?fix=permissions"
+
+    results = {
+        "commit": {
+            "heading": "Rule: Use commit hashes instead of refs in Actions",
+            "results": commit_results,
+            "fix": commit_fix_url,
+        },
+        "permissions": {
+            "heading": "Rule: Check workflow permissions",
+            "results": permissions_results,
+            "fix": permissions_fix_url,
+        },
+        "secrets": {
+            "heading": "Rule: Check for secrets being inherited by external Actions",
+            "results": secrets_results,
+            "fix": None,
+        },
+    }
+    return results
 
 
 @app.post("/webhook")
@@ -166,11 +251,14 @@ async def index(request: Request, search: str | None = None):
             )
         else:
             token = authenticate_github_app(details["installation_id"])
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-                "X-Github-Api-Version": "2022-11-28",
-            }
+            if not token:
+                logger.error("Failed to authenticate app")
+                return TEMPLATES.TemplateResponse(
+                    name="index.html.jinja",
+                    request=request,
+                    context={"error": "Failed to authenticate app"},
+                )
+            headers = gh_header_for_token(token)
             workflows_url = f"https://api.github.com/repos/{details['owner']}/{details['repo']}/actions/workflows"
             response = requests.get(workflows_url, headers=headers)
             response.raise_for_status()
@@ -178,7 +266,13 @@ async def index(request: Request, search: str | None = None):
 
             workflow_list = []
             for workflow in workflows:
-                workflow_list.append((workflow["name"], workflow["path"]))
+                scan_url = f"/scan/{details['repo']}/{details['owner']}?"
+                params = {
+                    "installation_id": details["installation_id"],
+                    "workflow_id": workflow["id"],
+                }
+                scan_url += urllib.parse.urlencode(params)
+                workflow_list.append((workflow["name"], workflow["path"], scan_url))
 
             context = {
                 "repository": details["repo"],
@@ -189,3 +283,29 @@ async def index(request: Request, search: str | None = None):
             )
 
     return TEMPLATES.TemplateResponse(name="index.html.jinja", request=request)
+
+
+@app.get("/scan/{repo}/{owner}")
+async def scan(
+    request: Request,
+    installation_id: int,
+    workflow_id: int,
+    repo: str,
+    owner: str,
+    fix: str | None = None,
+):
+    try:
+        workflow, contents = get_workflow(installation_id, owner, repo, workflow_id)
+        workflow_path = workflow["path"]
+
+        results = scan_workflow(contents, installation_id, owner, repo, fix)
+
+    except Exception as e:
+        logger.error(e)
+        return TEMPLATES.TemplateResponse(
+            name="scan.html.jinja", request=request, context={"error": e}
+        )
+    context = {"repository": repo, "workflow": workflow_path, "results": results}
+    return TEMPLATES.TemplateResponse(
+        name="scan.html.jinja", request=request, context=context
+    )
