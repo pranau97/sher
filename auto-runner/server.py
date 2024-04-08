@@ -1,7 +1,12 @@
 from .auth import authenticate_github_app, generate_jwt
 from .utils import logger, environment, gh_header_for_token
 from .vagrant import start_vm, destroy_vm
-from .rules import check_commit_hash, check_workflow_permissions, check_secrets
+from .rules import (
+    check_commit_hash,
+    check_workflow_permissions,
+    check_secrets,
+    set_workflow_permissions,
+)
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.templating import Jinja2Templates
@@ -22,6 +27,10 @@ app = FastAPI()
 BASE_PATH = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=f"{BASE_PATH}/templates")
 app.mount("/static", StaticFiles(directory=f"{BASE_PATH}/static"), name="static")
+
+
+def construct_yaml_str(self, node):
+    return self.construct_scalar(node)
 
 
 def verify_signature(payload_body: bytes, signature_header: str | None) -> None:
@@ -159,19 +168,29 @@ def get_workflow(
 
 
 def scan_workflow(
-    contents: str, installation_id: int, owner: str, repo: str, fix: str | None = None
+    contents: str,
+    installation_id: int,
+    owner: str,
+    repo: str,
+    workflow_id: int,
+    fix: str | None = None,
 ) -> dict:
-    workflow = yaml.safe_load(contents)
+    yaml.add_constructor(
+        "tag:yaml.org,2002:bool", construct_yaml_str, Loader=yaml.SafeLoader
+    )
+    workflow = yaml.load(contents, Loader=yaml.SafeLoader)
 
     if fix and fix == "commit":
-        commit_results = check_commit_hash(workflow, fix=True)
+        commit_results = check_commit_hash(
+            workflow, installation_id, owner, repo, workflow_id, fix=True
+        )
     else:
-        commit_results = check_commit_hash(workflow)
+        commit_results = check_commit_hash(
+            workflow, installation_id, owner, repo, workflow_id
+        )
 
     if fix and fix == "permissions":
-        permissions_results = check_workflow_permissions(
-            installation_id, owner, repo, fix=True
-        )
+        permissions_results = set_workflow_permissions(installation_id, owner, repo)
     else:
         permissions_results = check_workflow_permissions(installation_id, owner, repo)
 
@@ -184,7 +203,7 @@ def scan_workflow(
             break
     commit_fix_url = None
     if commit_flag:
-        commit_fix_url = f"/scan/{repo}/{owner}?installation_id={installation_id}&workflow_id={workflow['id']}?fix=commit"
+        commit_fix_url = f"/scan/{repo}/{owner}?installation_id={installation_id}&workflow_id={workflow_id}&fix=commit"
 
     permissions_flag = False
     for result in permissions_results:
@@ -193,7 +212,7 @@ def scan_workflow(
             break
     permissions_fix_url = None
     if permissions_flag:
-        permissions_fix_url = f"/scan/{repo}/{owner}?installation_id={installation_id}&workflow_id={workflow['id']}?fix=permissions"
+        permissions_fix_url = f"/scan/{repo}/{owner}?installation_id={installation_id}&workflow_id={workflow_id}&fix=permissions"
 
     results = {
         "commit": {
@@ -298,10 +317,12 @@ async def scan(
         workflow, contents = get_workflow(installation_id, owner, repo, workflow_id)
         workflow_path = workflow["path"]
 
-        results = scan_workflow(contents, installation_id, owner, repo, fix)
+        results = scan_workflow(
+            contents, installation_id, owner, repo, workflow_id, fix
+        )
 
     except Exception as e:
-        logger.error(e)
+        logger.error("Exception", exc_info=e)
         return TEMPLATES.TemplateResponse(
             name="scan.html.jinja", request=request, context={"error": e}
         )
